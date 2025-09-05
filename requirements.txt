@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+httpx
+janome
+spacy
+ginza
+ja_ginza
