@@ -5,3 +5,4 @@ janome
 spacy
 ginza
 ja_ginza
+argostranslate

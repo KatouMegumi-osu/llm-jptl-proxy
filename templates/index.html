@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM Proxy Dashboard</title>
+    <style>
+        :root {
+            --bg-color: #1e1e1e; --text-color: #d4d4d4; --border-color: #444;
+            --header-color: #2a2a2a; --pre-bg: #252526; --button-bg: #0e639c;
+            --button-hover: #1177bb; --success-color: #4CAF50; --error-color: #f44336;
+        }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: var(--bg-color); color: var(--text-color); margin: 0; padding: 0; }
+        .top-bar {
+            position: sticky;
+            top: 0;
+            background-color: var(--header-color);
+            padding: 10px 20px;
+            border-bottom: 1px solid var(--border-color);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        .top-bar-group { display: flex; align-items: center; gap: 10px; }
+        .top-bar-group label { font-weight: bold; }
+        .container { display: flex; flex-direction: row; gap: 20px; max-width: 95%; margin: 20px auto; }
+        .main-column { flex: 2; display: flex; flex-direction: column; gap: 20px; }
+        .sidebar-column { flex: 1; display: flex; flex-direction: column; gap: 20px; min-width: 450px; }
+        .panel { background-color: var(--header-color); border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; }
+        .panel-header { padding: 10px 15px; background-color: #333; font-weight: bold; border-bottom: 1px solid var(--border-color); }
+        .panel-content { padding: 15px; }
+        #log-container { max-height: 90vh; overflow-y: auto; display: flex; flex-direction: column-reverse; }
+        .log-entry { border: 1px solid var(--border-color); border-radius: 5px; margin-bottom: 10px; font-size: 0.9em; }
+        .log-header { background-color: #3c3c3c; padding: 5px 10px; font-weight: bold; }
+        .log-body { padding: 10px; white-space: pre-wrap; word-wrap: break-word; background-color: var(--pre-bg); }
+        .new-words-section { padding: 10px; background-color: #303030; border-top: 1px solid var(--border-color); }
+        .new-words-list { list-style: none; padding: 0; margin: 0; font-size: 0.9em; }
+        .new-words-list li { display: flex; align-items: center; margin-bottom: 5px; }
+        .add-word-btn { background-color: #3a813d; color: white; border: none; padding: 3px 8px; border-radius: 4px; cursor: pointer; margin-right: 10px; }
+        textarea, input[type="text"], input[type="number"], select { min-width: 150px; box-sizing: border-box; background-color: var(--pre-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 5px; font-family: monospace; font-size: 14px; padding: 8px; }
+        #dict-editor { height: 30vh; width: 100%; }
+        .controls { display: flex; gap: 10px; margin-top: 10px; }
+        button { background-color: var(--button-bg); color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; transition: background-color 0.2s; }
+        button:hover { background-color: var(--button-hover); }
+        .status-message { margin-top: 10px; font-weight: bold; min-height: 20px; }
+        .status-success { color: var(--success-color); }
+        .status-error { color: var(--error-color); }
+        .config-item { display: flex; flex-wrap: wrap; align-items: center; background-color: var(--pre-bg); padding: 8px; border-radius: 4px; margin-bottom:10px; }
+        .config-item label { flex-grow: 1; margin-right: 10px; }
+        .character-list { font-size: 0.9em; margin-top: 10px; max-height: 150px; overflow-y: auto; background: var(--pre-bg); padding: 10px; border-radius: 4px; }
+        .opt-group { margin-bottom: 10px; background-color: var(--pre-bg); padding: 8px; border-radius: 4px; }
+        .opt-main { display: flex; align-items: center; font-weight: bold; }
+        .opt-main input[type="checkbox"] { width: 18px; height: 18px; margin-right: 10px; }
+        .opt-sub { margin-left: 28px; padding-top: 8px; border-left: 2px solid var(--border-color); padding-left: 10px; }
+        .opt-sub-item { display: flex; align-items: center; margin-bottom: 5px; }
+        .opt-sub-item input[type="checkbox"] { width: 16px; height: 16px; margin-right: 10px; }
+    </style>
+</head>
+<body>
+    <div class="top-bar">
+        <div class="top-bar-group">
+            <label for="profile-selector">Profile:</label>
+            <select id="profile-selector"></select>
+            <button onclick="switchProfile()">Switch</button>
+        </div>
+        <div class="top-bar-group">
+            <button onclick="createProfile()">Create New</button>
+            <button onclick="deleteProfile()" style="background-color:#c0392b;">Delete</button>
+        </div>
+        <div class="top-bar-group" style="margin-left: auto;">
+            <div id="settings-status" class="status-message" style="margin: 0;"></div>
+            <button onclick="saveCurrentProfile()">Save Current Profile</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="main-column">
+            <div class="panel"> <div class="panel-header">Live Translation Log</div> <div class="panel-content" id="log-container"></div> </div>
+        </div>
+        <div class="sidebar-column">
+            <div class="panel">
+                <div class="panel-header">Profile Actions</div>
+                <div class="panel-content">
+                     <div class="config-item">
+                        <label for="vndb-id">VNDB ID (e.g., v17):</label>
+                        <input type="text" id="vndb-id" placeholder="v_ _ _">
+                    </div>
+                    <div class="controls">
+                        <button onclick="fetchVNDBData()">Fetch Character Data</button>
+                    </div>
+                    <div id="vndb-status" class="status-message"></div>
+                    <div id="character-list-container" class="character-list" style="display: none;">
+                        <strong>Fetched Characters:</strong> <ul id="character-list"></ul>
+                    </div>
+                </div>
+            </div>
+            <div class="panel">
+                <div class="panel-header">Configuration (Current Profile)</div>
+                <div class="panel-content">
+                    <div class="config-item"><label for="target_api_base_url">Target API Endpoint:</label><input type="text" id="target_api_base_url"></div>
+                    <div class="config-item"><label for="force_app_name">Force App Name:</label><input type="text" id="force_app_name" placeholder="Overrides X-Application-Name header"></div>
+                    <hr style="border-color: var(--border-color);">
+                    <div class="config-item"><input type="checkbox" id="pruning_enabled" onchange="togglePruningOptions()"><label for="pruning_enabled">Context Pruning</label></div>
+                    <div id="pruning-options"><div class="config-item"><label>Mode:</label><select id="pruning_mode"><option value="prune_japanese">Prune Japanese</option><option value="prune_english">Prune English</option><option value="prune_both">Prune Both</option><option value="keep_n_turns">Keep N Turns</option></select></div><div class="config-item"><label for="pruning_keep_n_turns">Turns to Keep:</label><input type="number" id="pruning_keep_n_turns" min="1"></div></div>
+                    <hr style="border-color: var(--border-color);">
+                    <div class="config-item"><input type="checkbox" id="summarization_enabled"><label for="summarization_enabled">Inject Summary</label></div>
+                    <div class="config-item">
+                        <label for="summarization_lines_per_summary">Lines per Summary Trigger:</label>
+                        <input type="number" id="summarization_lines_per_summary" min="1" style="max-width: 100px;">
+                    </div>
+                    <div class="config-item" style="flex-direction: column; align-items: flex-start;"><label for="summarization_prompt">Summarization Prompt:</label><textarea id="summarization_prompt" style="height: 150px; margin-top: 5px; width: 100%;"></textarea><p style="font-size: 0.8em; margin-top: 5px; color: #aaa;">Placeholders: <code>{previous_summary}</code>, <code>{japanese_text}</code></p></div>
+                    <div class="controls"><button id="generate-summary-btn" onclick="generateSummary()">Generate Summary</button></div>
+                    <div id="summary-gen-status" class="status-message"></div>
+                </div>
+            </div>
+            <div class="panel"><div class="panel-header">Optimization Toggles</div><div class="panel-content" id="optimization-container"></div></div>
+            <div class="panel"><div class="panel-header">Custom Dictionary</div><div class="panel-content"><textarea id="dict-editor"></textarea><div class="controls"><button onclick="saveDictionary()">Save</button><button onclick="loadDictionary()">Reload</button></div><div id="dict-status" class="status-message"></div></div></div>
+        </div>
+    </div>
+    <script>
+        let displayedTimestamps = new Set();
+        let currentSettings = {};
+        const optimizationLabels = {
+            detect_text_type: { label: "Detect Dialogue/Monologue" },
+            add_mtl_assist: { label: "Add MTL Reference" },
+            add_vocabulary: { label: "Add Vocabulary" },
+            add_grammar: { label: "Add Grammar Analysis" },
+            add_subject_pov: {
+                label: "Add Subject/POV Analysis",
+                sub: { pov_character: "Point of View Character", likely_subject: "Likely Unspoken Subject" }
+            },
+            add_ner: {
+                label: "Add Named Entity Recognition (NER)",
+                sub: { use_ginza: "Use GiNZA Model", use_genders_in_ner: "Include Gender Regex" }
+            },
+            add_linguistics: {
+                label: "Add Linguistic Analysis",
+                sub: { honorifics: "Detect Honorifics", formality: "Detect Formality" }
+            },
+            add_sentiment: { label: "Add Sentiment Analysis" },
+            add_char_voice: { label: "Add Character Voice Analysis" },
+            use_corrective_pass: {
+                label: "Use Corrective LLM Pass (Adds Latency!)",
+                sub: {
+                    add_context: "Provide conversation context to proofreader",
+                    temperature: { label: "Temperature:", type: "number", step: 0.1, style: "max-width: 70px;" },
+                    model_name: { label: "Model Name:", type: "text", placeholder: "e.g., proofreader/model", style: "flex-grow: 1;" }
+                }
+            }
+        };
+        
+        function togglePruningOptions() { document.getElementById('pruning-options').style.display = document.getElementById('pruning_enabled').checked ? 'block' : 'none'; }
+        
+        async function loadSettings(settings) {
+            currentSettings = settings;
+            document.getElementById('target_api_base_url').value = settings.target_api_base_url || '';
+            document.getElementById('force_app_name').value = settings.force_app_name || '';
+            document.getElementById('pruning_enabled').checked = settings.pruning_settings.enabled;
+            document.getElementById('pruning_mode').value = settings.pruning_settings.mode;
+            document.getElementById('pruning_keep_n_turns').value = settings.pruning_settings.keep_n_turns;
+            document.getElementById('summarization_enabled').checked = settings.summarization_settings.enabled;
+            document.getElementById('summarization_lines_per_summary').value = settings.summarization_settings.lines_per_summary || 50;
+            document.getElementById('summarization_prompt').value = settings.summarization_settings.prompt || '';
+
+            const optimizationContainer = document.getElementById('optimization-container');
+            optimizationContainer.innerHTML = '';
+            
+            for (const key in optimizationLabels) {
+                const config = optimizationLabels[key];
+                const setting = settings.optimization_toggles[key] || {};
+                
+                const groupDiv = document.createElement('div');
+                groupDiv.className = 'opt-group';
+                groupDiv.dataset.key = key;
+
+                let subHtml = '';
+                if (config.sub) {
+                    subHtml += `<div class="opt-sub" style="display: ${setting.enabled ? 'block' : 'none'};">`;
+                    for (const subKey in config.sub) {
+                        const subConfig = config.sub[subKey];
+                        if (typeof subConfig === 'object') {
+                            subHtml += `<div class="config-item" style="padding: 5px 0;">
+                                <label for="${key}-${subKey}">${subConfig.label}</label>
+                                <input type="${subConfig.type}" id="${key}-${subKey}" data-sub-key="${subKey}" 
+                                       value="${setting[subKey] || ''}" placeholder="${subConfig.placeholder || ''}" 
+                                       ${subConfig.step ? `step="${subConfig.step}"` : ''} style="${subConfig.style || ''}">
+                            </div>`;
+                        } else {
+                            subHtml += `<div class="opt-sub-item">
+                                <input type="checkbox" id="${key}-${subKey}" data-sub-key="${subKey}" ${setting[subKey] ? 'checked' : ''}>
+                                <label for="${key}-${subKey}">${subConfig}</label>
+                            </div>`;
+                        }
+                    }
+                    subHtml += '</div>';
+                }
+
+                groupDiv.innerHTML = `<div class="opt-main">
+                    <input type="checkbox" class="opt-main-toggle" ${setting.enabled ? 'checked' : ''}>
+                    <label>${config.label}</label>
+                </div>${subHtml}`;
+                
+                optimizationContainer.appendChild(groupDiv);
+            }
+
+            optimizationContainer.querySelectorAll('.opt-main-toggle').forEach(toggle => {
+                toggle.addEventListener('change', (event) => {
+                    const subDiv = event.target.closest('.opt-group').querySelector('.opt-sub');
+                    if (subDiv) subDiv.style.display = event.target.checked ? 'block' : 'none';
+                });
+            });
+
+            const charContainer = document.getElementById('character-list-container');
+            const charList = document.getElementById('character-list');
+            charList.innerHTML = '';
+            if (settings.character_profiles && Object.keys(settings.character_profiles).length > 0) {
+                for (const charId in settings.character_profiles) {
+                    const profile = settings.character_profiles[charId];
+                    const charName = profile.name || profile.original || `(ID: ${charId})`;
+                    const listItem = document.createElement('li');
+                    listItem.textContent = `${charName} (Traits: ${profile.traits.length})`;
+                    charList.appendChild(listItem);
+                }
+                charContainer.style.display = 'block';
+            } else { charContainer.style.display = 'none'; }
+            togglePruningOptions();
+        }
+        
+        // <-- START: THIS IS THE FIX. RESTORED THE INITIALIZATION OF newSettings -->
+        async function saveCurrentProfile() {
+            const newSettings = {
+                target_api_base_url: document.getElementById('target_api_base_url').value,
+                force_app_name: document.getElementById('force_app_name').value.trim(),
+                pruning_settings: { enabled: document.getElementById('pruning_enabled').checked, mode: document.getElementById('pruning_mode').value, keep_n_turns: parseInt(document.getElementById('pruning_keep_n_turns').value, 10) },
+                summarization_settings: {
+                    enabled: document.getElementById('summarization_enabled').checked,
+                    lines_per_summary: parseInt(document.getElementById('summarization_lines_per_summary').value, 10) || 50,
+                    max_summary_chars: currentSettings.summarization_settings.max_summary_chars || 1000,
+                    prompt: document.getElementById('summarization_prompt').value
+                },
+                optimization_toggles: {}
+            };
+        // <-- END: THIS IS THE FIX. -->
+
+            document.querySelectorAll('#optimization-container .opt-group').forEach(group => {
+                const key = group.dataset.key;
+                const mainToggle = group.querySelector('.opt-main-toggle');
+                const setting = { enabled: mainToggle.checked };
+                
+                group.querySelectorAll('input[data-sub-key]').forEach(subToggle => {
+                    const subKey = subToggle.dataset.subKey;
+                    if (subToggle.type === 'checkbox') {
+                        setting[subKey] = subToggle.checked;
+                    } else if (subToggle.type === 'number') {
+                        setting[subKey] = parseFloat(subToggle.value);
+                    } else {
+                        setting[subKey] = subToggle.value;
+                    }
+                });
+                newSettings.optimization_toggles[key] = setting;
+            });
+            
+            try {
+                const response = await fetch('/api/profiles/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newSettings) });
+                if (response.ok) {
+                    showStatus(document.getElementById('settings-status'), "Profile saved!", "success");
+                    await fetchAndLoadSettings();
+                } else {
+                    showStatus(document.getElementById('settings-status'), `Error: ${(await response.json()).detail}`, "error");
+                }
+            } catch (error) { showStatus(document.getElementById('settings-status'), "Failed to save profile.", "error"); }
+        }
+
+        async function fetchAndLoadSettings() {
+            try {
+                const response = await fetch('/api/settings');
+                if (!response.ok) throw new Error("Failed to fetch settings from server.");
+                const settings = await response.json();
+                await loadSettings(settings);
+            } catch (error) {
+                showStatus(document.getElementById('settings-status'), "Failed to load settings.", "error");
+            }
+        }
+
+        async function loadProfiles() {
+            try {
+                const response = await fetch('/api/profiles');
+                const data = await response.json();
+                const selector = document.getElementById('profile-selector');
+                selector.innerHTML = '';
+                data.profiles.forEach(name => {
+                    const option = document.createElement('option');
+                    option.value = name;
+                    option.textContent = name;
+                    if (name === data.active_profile) option.selected = true;
+                    selector.appendChild(option);
+                });
+            } catch (error) { showStatus(document.getElementById('settings-status'), "Failed to load profiles.", "error"); }
+        }
+
+        async function switchProfile() {
+            const profileName = document.getElementById('profile-selector').value;
+            try {
+                const response = await fetch('/api/profiles/switch', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ name: profileName }) });
+                if(response.ok) {
+                    showStatus(document.getElementById('settings-status'), `Switched to ${profileName}`, "success");
+                    await loadProfiles();
+                    await fetchAndLoadSettings();
+                } else { throw new Error(await response.text()); }
+            } catch (error) { showStatus(document.getElementById('settings-status'), `Error switching profile: ${error}`, "error"); }
+        }
+
+        async function createProfile() {
+            const profileName = prompt("Enter new profile name:");
+            if (!profileName || profileName.trim() === '') return;
+            try {
+                const response = await fetch('/api/profiles/create', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ name: profileName.trim() }) });
+                if(response.ok) {
+                    showStatus(document.getElementById('settings-status'), `Profile '${profileName}' created.`, "success");
+                    await loadProfiles();
+                } else { throw new Error((await response.json()).detail); }
+            } catch (error) { showStatus(document.getElementById('settings-status'), `Error: ${error}`, "error"); }
+        }
+
+        async function deleteProfile() {
+            const profileName = document.getElementById('profile-selector').value;
+            if (profileName === 'default') {
+                showStatus(document.getElementById('settings-status'), "Cannot delete the default profile.", "error");
+                return;
+            }
+            if (!confirm(`Are you sure you want to delete the profile "${profileName}"? This cannot be undone.`)) return;
+            try {
+                const response = await fetch(`/api/profiles/${profileName}`, { method: 'DELETE' });
+                if(response.ok) {
+                    showStatus(document.getElementById('settings-status'), `Profile '${profileName}' deleted.`, "success");
+                    await loadProfiles();
+                    await fetchAndLoadSettings();
+                } else { throw new Error((await response.json()).detail); }
+            } catch (error) { showStatus(document.getElementById('settings-status'), `Error: ${error}`, "error"); }
+        }
+
+        async function fetchVNDBData() {
+            const vndbId = document.getElementById('vndb-id').value;
+            if (!vndbId) { showStatus(document.getElementById('vndb-status'), "Please enter a VNDB ID.", "error"); return; }
+            showStatus(document.getElementById('vndb-status'), "Fetching, please wait...", "success");
+            try {
+                const response = await fetch('/api/profiles/fetch_vndb', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ vndb_id: vndbId }) });
+                const result = await response.json();
+                if(response.ok) {
+                    showStatus(document.getElementById('vndb-status'), result.message, "success");
+                    await fetchAndLoadSettings();
+                } else { throw new Error(result.detail); }
+            } catch (error) { showStatus(document.getElementById('vndb-status'), `Error: ${error}`, "error"); }
+        }
+
+        async function generateSummary() {
+            const btn = document.getElementById('generate-summary-btn');
+            btn.disabled = true; btn.textContent = 'Generating...';
+            try {
+                const response = await fetch('/api/summarize', { method: 'POST' });
+                const result = await response.json();
+                if(response.ok) { showStatus(document.getElementById('summary-gen-status'), result.message, "success"); }
+                else { throw new Error(result.detail); }
+            } catch (error) { showStatus(document.getElementById('summary-gen-status'), `Error: ${error}`, "error"); }
+            finally { btn.disabled = false; btn.textContent = 'Generate Summary'; }
+        }
+
+        function addWordToEditor(word, definition) {
+            const editor = document.getElementById('dict-editor');
+            try {
+                const dict = JSON.parse(editor.value);
+                if (!dict[word]) {
+                    dict[word] = definition;
+                    editor.value = JSON.stringify(dict, null, 4);
+                    showStatus(document.getElementById('dict-status'), `Added '${word}' to editor. Click Save.`, "success");
+                }
+            } catch (e) {}
+        }
+        
+        async function fetchLogs() {
+            try {
+                const response = await fetch('/api/logs');
+                const logs = await response.json();
+                const container = document.getElementById('log-container');
+                logs.forEach(log => {
+                    if (displayedTimestamps.has(log.timestamp)) return;
+                    displayedTimestamps.add(log.timestamp);
+                    const entry = document.createElement('div');
+                    entry.className = 'log-entry';
+                    let newWordsHtml = '';
+                    if (log.new_words && Object.keys(log.new_words).length > 0) {
+                        newWordsHtml += '<div class="new-words-section"><strong>New Vocabulary Found:</strong><ul class="new-words-list">';
+                        for (const word in log.new_words) {
+                            newWordsHtml += `<li><button class="add-word-btn" onclick="addWordToEditor('${escapeHtml(word)}', '${escapeHtml(log.new_words[word])}')">+</button> <strong>${escapeHtml(word)}:</strong> ${escapeHtml(log.new_words[word])}</li>`;
+                        }
+                        newWordsHtml += '</ul></div>';
+                    }
+                    entry.innerHTML = `<div class="log-header">${log.timestamp}</div><div class="log-body"><strong>Original:</strong> ${escapeHtml(log.original_prompt)}\n\n<strong>Analysis:</strong>${escapeHtml(log.injected_analysis)}</div>${newWordsHtml}`;
+                    container.prepend(entry);
+                });
+            } catch(e) { /* Fails silently */ }
+        }
+        
+        async function loadDictionary() {
+            try {
+                const response = await fetch('/api/custom-dict');
+                const data = await response.json();
+                document.getElementById('dict-editor').value = JSON.stringify(data, null, 4);
+                showStatus(document.getElementById('dict-status'), "Dictionary loaded.", "success");
+            } catch (error) { showStatus(document.getElementById('dict-status'), "Failed to load dictionary.", "error"); }
+        }
+        
+        async function saveDictionary() {
+            const content = document.getElementById('dict-editor').value;
+            try {
+                JSON.parse(content);
+                const response = await fetch('/api/custom-dict', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: content }) });
+                if (response.ok) {
+                    showStatus(document.getElementById('dict-status'), "Dictionary saved successfully!", "success");
+                } else {
+                    const errorData = await response.json();
+                    showStatus(document.getElementById('dict-status'), `Error: ${errorData.detail}`, "error");
+                }
+            } catch (error) {
+                showStatus(document.getElementById('dict-status'), "Invalid JSON format. Please correct it.", "error");
+            }
+        }
+
+        function showStatus(element, message, type) { element.textContent = message; element.className = `status-message status-${type}`; setTimeout(() => { element.textContent = ''; element.className = 'status-message'; }, 5000); }
+        function escapeHtml(unsafe) { return unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
+        
+        async function initialLoad() {
+            await loadProfiles();
+            await fetchAndLoadSettings();
+            loadDictionary();
+            fetchLogs();
+            setInterval(fetchLogs, 3000);
+        }
+        window.onload = initialLoad;
+    </script>
+</body>
+</html>
