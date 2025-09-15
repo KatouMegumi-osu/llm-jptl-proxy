@@ -8,16 +8,15 @@ from fastapi.templating import Jinja2Templates
 from copy import deepcopy
 import asyncio
 
-# Import modularized components
 import config
 import analysis
 import vndb
 import core_logic
 
-# --- 4. FastAPI Application Setup ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config.SUMMARIES_DIR.mkdir(exist_ok=True)
+    config.LANGUAGES_DIR.mkdir(exist_ok=True)
     config.load_profiles_from_disk()
     config.load_app_state()
     config.activate_profile(config.ACTIVE_PROFILE_NAME)
@@ -25,6 +24,7 @@ async def lifespan(app: FastAPI):
     analysis.setup_analyzers()
     analysis.load_dictionary()
     analysis.load_ignore_list()
+    config.load_languages_from_disk()
     
     config.vndb_client = httpx.AsyncClient(timeout=30.0)
     
@@ -45,7 +45,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")
 
-# --- 5. Web UI and API Endpoints ---
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
@@ -57,6 +56,10 @@ async def get_logs():
 @app.get("/api/custom-dict", response_class=JSONResponse)
 async def get_custom_dict():
     return analysis.load_custom_dictionary()
+
+@app.get("/api/languages", response_class=JSONResponse)
+async def get_languages():
+    return config.AVAILABLE_LANGUAGES
 
 @app.post("/api/custom-dict")
 async def save_custom_dict(request: Request):
@@ -70,7 +73,6 @@ async def save_custom_dict(request: Request):
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON format.")
 
-# --- Profile Management Endpoints ---
 @app.get("/api/settings", response_class=JSONResponse)
 async def get_settings():
     full_settings = deepcopy(config.SETTINGS)
@@ -119,7 +121,6 @@ async def save_active_profile(request: Request):
     
     return JSONResponse({"status": "success", "message": f"Profile '{config.ACTIVE_PROFILE_NAME}' saved."})
 
-
 @app.post("/api/profiles/create")
 async def create_new_profile(request: Request):
     data = await request.json()
@@ -145,7 +146,6 @@ async def delete_profile(profile_name: str):
         config.save_app_state()
     return JSONResponse({"status": "success", "message": f"Profile '{profile_name}' deleted."})
 
-# --- Feature Endpoints ---
 @app.post("/api/profiles/fetch_vndb", response_class=JSONResponse)
 async def fetch_vndb_data_endpoint(request: Request):
     return await vndb.fetch_vndb_data(request)
@@ -163,7 +163,6 @@ async def trigger_summary_generation():
 async def run_benchmark(request: Request):
     return await core_logic.run_benchmark(request)
 
-# --- Main Proxy Endpoint ---
 @app.post("/{path:path}")
 async def proxy_to_local_llm(request: Request, path: str):
     return await core_logic.proxy_to_local_llm(request, path)

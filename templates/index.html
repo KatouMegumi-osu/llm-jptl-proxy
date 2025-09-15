@@ -100,10 +100,11 @@
                 <div class="panel-header">Configuration (Current Profile)</div>
                 <div class="panel-content">
                     <div class="config-item"><label for="target_api_base_url">Target API Endpoint:</label><input type="text" id="target_api_base_url"></div>
+                    <div class="config-item"><label for="target_api_key">Target API Key(s):</label><input type="text" id="target_api_key" placeholder="key1, key2, ..."></div>
+                    <div class="config-item"><label for="target_language">Target Language:</label><select id="target_language"></select></div>
                     <div class="config-item"><label for="force_app_name">Force App Name:</label><input type="text" id="force_app_name" placeholder="Overrides X-Application-Name header"></div>
                     <hr style="border-color: var(--border-color);">
-                    <div class="config-item"><input type="checkbox" id="pruning_enabled" onchange="togglePruningOptions()"><label for="pruning_enabled">Context Pruning</label></div>
-                    <div id="pruning-options"><div class="config-item"><label>Mode:</label><select id="pruning_mode"><option value="prune_japanese">Prune Japanese</option><option value="prune_english">Prune English</option><option value="prune_both">Prune Both</option><option value="keep_n_turns">Keep N Turns</option></select></div><div class="config-item"><label for="pruning_keep_n_turns">Turns to Keep:</label><input type="number" id="pruning_keep_n_turns" min="1"></div></div>
+                    <div id="main-pruning-controls"></div>
                     <hr style="border-color: var(--border-color);">
                     <div class="config-item"><input type="checkbox" id="summarization_enabled"><label for="summarization_enabled">Inject Summary</label></div>
                     <div class="config-item">
@@ -139,7 +140,6 @@
                 label: "Add Linguistic Analysis",
                 sub: { honorifics: "Detect Honorifics", formality: "Detect Formality" }
             },
-            add_sentiment: { label: "Add Sentiment Analysis" },
             add_char_voice: { label: "Add Character Voice Analysis" },
             use_corrective_pass: {
                 label: "Use Corrective LLM Pass (Adds Latency!)",
@@ -151,15 +151,44 @@
             }
         };
         
-        function togglePruningOptions() { document.getElementById('pruning-options').style.display = document.getElementById('pruning_enabled').checked ? 'block' : 'none'; }
+        function createPruningControls(idPrefix, settings) {
+            return `
+                <div class="config-item">
+                    <input type="checkbox" id="${idPrefix}_enabled" ${settings.enabled ? 'checked' : ''}>
+                    <label for="${idPrefix}_enabled">Context Pruning</label>
+                </div>
+                <div id="${idPrefix}-options" style="display: ${settings.enabled ? 'block' : 'none'};">
+                    <div class="config-item">
+                        <label>Mode:</label>
+                        <select id="${idPrefix}_mode">
+                            <option value="prune_japanese" ${settings.mode === 'prune_japanese' ? 'selected' : ''}>Prune Japanese</option>
+                            <option value="prune_english" ${settings.mode === 'prune_english' ? 'selected' : ''}>Prune English</option>
+                            <option value="prune_both" ${settings.mode === 'prune_both' ? 'selected' : ''}>Prune Both</option>
+                            <option value="keep_n_turns" ${settings.mode === 'keep_n_turns' ? 'selected' : ''}>Keep N Turns</option>
+                        </select>
+                    </div>
+                    <div class="config-item">
+                        <label for="${idPrefix}_keep_n_turns">Turns to Keep:</label>
+                        <input type="number" id="${idPrefix}_keep_n_turns" min="1" value="${settings.keep_n_turns}">
+                    </div>
+                </div>
+            `;
+        }
         
         async function loadSettings(settings) {
             currentSettings = settings;
             document.getElementById('target_api_base_url').value = settings.target_api_base_url || '';
+            document.getElementById('target_api_key').value = settings.target_api_key || '';
+            document.getElementById('target_language').value = settings.target_language || 'en';
             document.getElementById('force_app_name').value = settings.force_app_name || '';
-            document.getElementById('pruning_enabled').checked = settings.pruning_settings.enabled;
-            document.getElementById('pruning_mode').value = settings.pruning_settings.mode;
-            document.getElementById('pruning_keep_n_turns').value = settings.pruning_settings.keep_n_turns;
+
+            const mainPruningContainer = document.getElementById('main-pruning-controls');
+            mainPruningContainer.innerHTML = createPruningControls('pruning', settings.pruning_settings || {});
+            const mainPruningToggle = document.getElementById('pruning_enabled');
+            if(mainPruningToggle) mainPruningToggle.addEventListener('change', () => {
+                document.getElementById('pruning-options').style.display = mainPruningToggle.checked ? 'block' : 'none';
+            });
+            
             document.getElementById('summarization_enabled').checked = settings.summarization_settings.enabled;
             document.getElementById('summarization_lines_per_summary').value = settings.summarization_settings.lines_per_summary || 50;
             document.getElementById('summarization_prompt').value = settings.summarization_settings.prompt || '';
@@ -194,6 +223,11 @@
                             </div>`;
                         }
                     }
+                    if (key === 'use_corrective_pass') {
+                        subHtml += '<hr style="border-color: var(--border-color); margin: 10px 0;">';
+                        subHtml += '<strong>Proofreader Context Settings:</strong>';
+                        subHtml += createPruningControls('proofreader_pruning', settings.proofreader_pruning_settings || {});
+                    }
                     subHtml += '</div>';
                 }
 
@@ -211,6 +245,13 @@
                     if (subDiv) subDiv.style.display = event.target.checked ? 'block' : 'none';
                 });
             });
+            
+            const proofPruningToggle = document.getElementById('proofreader_pruning_enabled');
+            if (proofPruningToggle) {
+                proofPruningToggle.addEventListener('change', () => {
+                    document.getElementById('proofreader_pruning-options').style.display = proofPruningToggle.checked ? 'block' : 'none';
+                });
+            }
 
             const charContainer = document.getElementById('character-list-container');
             const charList = document.getElementById('character-list');
@@ -225,24 +266,32 @@
                 }
                 charContainer.style.display = 'block';
             } else { charContainer.style.display = 'none'; }
-            togglePruningOptions();
         }
         
-        // <-- START: THIS IS THE FIX. RESTORED THE INITIALIZATION OF newSettings -->
         async function saveCurrentProfile() {
             const newSettings = {
                 target_api_base_url: document.getElementById('target_api_base_url').value,
+                target_api_key: document.getElementById('target_api_key').value.trim(),
+                target_language: document.getElementById('target_language').value,
                 force_app_name: document.getElementById('force_app_name').value.trim(),
-                pruning_settings: { enabled: document.getElementById('pruning_enabled').checked, mode: document.getElementById('pruning_mode').value, keep_n_turns: parseInt(document.getElementById('pruning_keep_n_turns').value, 10) },
+                pruning_settings: { 
+                    enabled: document.getElementById('pruning_enabled').checked, 
+                    mode: document.getElementById('pruning_mode').value, 
+                    keep_n_turns: parseInt(document.getElementById('pruning_keep_n_turns').value, 10) 
+                },
                 summarization_settings: {
                     enabled: document.getElementById('summarization_enabled').checked,
                     lines_per_summary: parseInt(document.getElementById('summarization_lines_per_summary').value, 10) || 50,
                     max_summary_chars: currentSettings.summarization_settings.max_summary_chars || 1000,
                     prompt: document.getElementById('summarization_prompt').value
                 },
-                optimization_toggles: {}
+                optimization_toggles: {},
+                proofreader_pruning_settings: {
+                    enabled: document.getElementById('proofreader_pruning_enabled').checked,
+                    mode: document.getElementById('proofreader_pruning_mode').value,
+                    keep_n_turns: parseInt(document.getElementById('proofreader_pruning_keep_n_turns').value, 10)
+                }
             };
-        // <-- END: THIS IS THE FIX. -->
 
             document.querySelectorAll('#optimization-container .opt-group').forEach(group => {
                 const key = group.dataset.key;
@@ -281,6 +330,24 @@
                 await loadSettings(settings);
             } catch (error) {
                 showStatus(document.getElementById('settings-status'), "Failed to load settings.", "error");
+            }
+        }
+
+        async function loadLanguages() {
+            try {
+                const response = await fetch('/api/languages');
+                const languages = await response.json();
+                const selector = document.getElementById('target_language');
+                selector.innerHTML = '';
+                const sortedLangs = Object.values(languages).sort((a, b) => a.name.localeCompare(b.name));
+                sortedLangs.forEach(lang => {
+                    const option = document.createElement('option');
+                    option.value = lang.code;
+                    option.textContent = lang.name;
+                    selector.appendChild(option);
+                });
+            } catch (error) {
+                showStatus(document.getElementById('settings-status'), "Failed to load languages.", "error");
             }
         }
 
@@ -432,6 +499,7 @@
         function escapeHtml(unsafe) { return unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
         
         async function initialLoad() {
+            await loadLanguages();
             await loadProfiles();
             await fetchAndLoadSettings();
             loadDictionary();

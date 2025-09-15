@@ -97,6 +97,20 @@ async def build_enhanced_prompt(body: dict, settings: dict, app_name: str) -> tu
     if not (messages and messages[-1].get("role") == "user"):
         return enhanced_body, "", {}, False, False
 
+    target_lang_code = settings.get("target_language", "en")
+    lang_info = config.AVAILABLE_LANGUAGES.get(target_lang_code, {"language_name": "English"})
+    target_lang_name = lang_info["language_name"]
+
+    for message in enhanced_body.get("messages", []):
+        if message.get("role") == "system" and "content" in message:
+            content = message["content"]
+            content = content.replace("Japanese-to-English", f"Japanese-to-{target_lang_name}")
+            content = content.replace("English translation", f"{target_lang_name} translation")
+            content = content.replace("English text", f"{target_lang_name} text")
+            content = content.replace("English sound effects", f"{target_lang_name} sound effects")
+            message["content"] = content
+            break
+            
     last_user_message = messages[-1]
     history_to_prune = messages[:-1]
     
@@ -212,7 +226,7 @@ async def build_enhanced_prompt(body: dict, settings: dict, app_name: str) -> tu
         if summary:
             appendix += f"--- Story Summary (Long-Term Context) ---\n{summary}\n\n"
 
-    appendix += "This is an automated analysis to assist translation. **You MUST provide an English translation. Do NOT output romaji.**\n"
+    appendix += f"This is an automated analysis to assist translation. **You MUST provide a {target_lang_name} translation. Do NOT output romaji.**\n"
     if character_profile_injection:
         appendix += character_profile_injection
     if config.SCENE_CONTEXT["present_characters"]:
@@ -224,9 +238,9 @@ async def build_enhanced_prompt(body: dict, settings: dict, app_name: str) -> tu
     
     if opt_toggles.get("detect_text_type", {}).get("enabled"):
         if is_dialogue_flag:
-            appendix += "Instruction: SPOKEN DIALOGUE... Output only dialogue in quotes.\n"; is_dialogue = True
+            appendix += f"Instruction: SPOKEN DIALOGUE... Output only dialogue in quotes (in {target_lang_name}).\n"; is_dialogue = True
         else:
-            appendix += "Instruction: INTERNAL MONOLOGUE... Do NOT use quotes.\n"
+            appendix += f"Instruction: INTERNAL MONOLOGUE... Do NOT use quotes. Output only the thought (in {target_lang_name}).\n"
             if speaker != "Unknown":
                 appendix += f"INSTRUCTION: Since this is POV narration and the subject is omitted, the subject of this action is {speaker}.\n"
     
@@ -297,29 +311,33 @@ async def corrective_llm_pass(original_jp: str, stream: httpx.Response.aiter_raw
         "stream": True
     }
 
+    target_lang_code = config.SETTINGS.get("target_language", "en")
+    lang_info = config.AVAILABLE_LANGUAGES.get(target_lang_code, {"language_name": "English"})
+    target_lang_name = lang_info["language_name"]
+
     if correction_cfg.get("add_context"):
         system_prompt = (
-            "You are a master-level Japanese-to-English translator and editor, reviewing the work of a junior translator. "
+            f"You are a master-level Japanese-to-{target_lang_name} translator and editor, reviewing the work of a junior translator. "
             "Your task is to correct it, using the conversation history (backlog) provided.\n"
             "CRITICAL: Ensure the subject and object of the sentence are correct based on the context. Do not change the meaning.\n"
             "Focus on fixing: 1. Contextual errors. 2. Unnatural phrasing. 3. Untranslated romaji.\n"
-            "Output ONLY the final, corrected English translation and nothing else."
+            f"Output ONLY the final, corrected {target_lang_name} translation and nothing else."
         )
         history = messages[:-1]
         if len(history) > 8: history = history[-8:]
         correction_messages = [{"role": "system", "content": system_prompt}] + history
         correction_messages.append({
             "role": "user",
-            "content": f"Review this translation.\nOriginal Japanese: 「{original_jp}」\nFlawed English: \"{flawed_en}\"\nCorrected English:"
+            "content": f"Review this translation.\nOriginal Japanese: 「{original_jp}」\nFlawed {target_lang_name}: \"{flawed_en}\"\nCorrected {target_lang_name}:"
         })
         body["messages"] = correction_messages
     else:
         simple_prompt = (
-            "You are a proofreading expert. Correct the flawed English translation based on the original Japanese.\n"
-            "Output ONLY the corrected English translation.\n\n"
+            f"You are a proofreading expert. Correct the flawed {target_lang_name} translation based on the original Japanese.\n"
+            f"Output ONLY the corrected {target_lang_name} translation.\n\n"
             f"Original Japanese: 「{original_jp}」\n"
-            f"Flawed English: \"{flawed_en}\"\n"
-            "Corrected English:"
+            f"Flawed {target_lang_name}: \"{flawed_en}\"\n"
+            f"Corrected {target_lang_name}:"
         )
         body["messages"] = [{"role": "user", "content": simple_prompt}]
     
@@ -368,6 +386,23 @@ async def final_processing_streamer(stream: httpx.Response.aiter_raw, is_dialogu
 
 async def run_benchmark(request: Request):
     raise HTTPException(status_code=501, detail="Benchmark function not updated for new logic.")
+
+# <-- START: THIS IS THE FIX. Added the missing function. -->
+def get_next_api_key():
+    """Gets the next API key from the list and rotates the index."""
+    api_key_str = config.SETTINGS.get("target_api_key", "")
+    if not api_key_str:
+        return None
+    
+    keys = re.split(r'[,|\s]+', api_key_str)
+    keys = [k.strip() for k in keys if k.strip()]
+    if not keys:
+        return None
+    
+    key = keys[config.API_KEY_INDEX]
+    config.API_KEY_INDEX = (config.API_KEY_INDEX + 1) % len(keys)
+    return key
+# <-- END: THIS IS THE FIX. -->
 
 async def proxy_to_local_llm(request: Request, path: str):
     forced_app_name = config.SETTINGS.get("force_app_name", "")
@@ -433,11 +468,23 @@ async def proxy_to_local_llm(request: Request, path: str):
         speaker_match = re.match(r"(\w+)", cleaned_prompt)
         speaker = speaker_match.group(1) if speaker_match else "Unknown"
 
-    except (json.JSONDecodeError, ValueError) as e:
+    except (json.JSONDecodeError, ValueError, KeyError) as e:
         print(f"--- Could not process request: {e}. Passing original request through. ---")
         pass
 
-    headers = {"Host": "localhost:5001", "User-Agent": "condom-proxy/live", "Accept": "text/event-stream"}
+    headers = {
+        "User-Agent": f"condom-proxy/live",
+        "Accept": "text/event-stream",
+        "Content-Type": "application/json"
+    }
+    
+    api_key = get_next_api_key()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    
+    if "localhost" in config.SETTINGS.get("target_api_base_url", ""):
+        headers["Host"] = "localhost:5001"
+
     url = f"{config.SETTINGS['target_api_base_url'].rstrip('/')}/{path.lstrip('/')}"
     try:
         req = config.llm_client.build_request("POST", url, headers=headers, content=req_body_bytes)

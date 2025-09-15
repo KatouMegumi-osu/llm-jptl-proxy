@@ -13,6 +13,7 @@ DICT_IGNORE_LIST_FILE = Path("dict_ignorelist.json")
 PROFILES_FILE = Path("profiles.json")
 APP_STATE_FILE = Path("app_state.json")
 SUMMARIES_DIR = Path("./summaries")
+LANGUAGES_DIR = Path("./languages")
 PERSONALITY_TRAIT_PARENT_IDS = { "g445", "g2185", "g448", "g446" }
 
 # --- Global State Variables ---
@@ -24,9 +25,13 @@ TOTAL_LINE_COUNT = 0
 LAST_SUMMARY_LINE_COUNT = 0
 SCENE_CONTEXT = {"present_characters": set(), "last_event": ""}
 CHARACTER_VOICES = {}
+AVAILABLE_LANGUAGES = {}
+API_KEY_INDEX = 0
 
 DEFAULT_SETTINGS = {
     "target_api_base_url": "http://localhost:5001",
+    "target_api_key": "",
+    "target_language": "en",
     "force_app_name": "",
     "timeout_settings": {
         "connect": 10.0,
@@ -34,7 +39,7 @@ DEFAULT_SETTINGS = {
         "write": 300.0,
         "pool": 10.0
     },
-    "pruning_settings": {"enabled": True, "mode": "prune_japanese", "keep_n_turns": 8},
+    "pruning_settings": {"enabled": True, "mode": "prune_english", "keep_n_turns": 8},
     "summarization_settings": {
         "enabled": True, "max_summary_chars": 1000, "lines_per_summary": 50,
         "prompt": (
@@ -61,6 +66,11 @@ DEFAULT_SETTINGS = {
             "temperature": 0.4,
             "model_name": "correction/model"
         }
+    },
+    "proofreader_pruning_settings": {
+        "enabled": True,
+        "mode": "keep_n_turns",
+        "keep_n_turns": 4
     }
 }
 
@@ -161,6 +171,21 @@ def save_counters(profile_name: str):
             }, f, indent=2)
     except OSError as e:
         print(f"!!! COUNTER FILE ERROR: Could not write to {counter_file}. Error: {e} !!!")
+
+def load_languages_from_disk():
+    global AVAILABLE_LANGUAGES
+    LANGUAGES_DIR.mkdir(exist_ok=True)
+    for lang_file in LANGUAGES_DIR.glob("*.json"):
+        try:
+            with open(lang_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if "code" in data and "name" in data and "language_name" in data:
+                    AVAILABLE_LANGUAGES[data["code"]] = data
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"!!! LANGUAGE FILE ERROR: Could not load {lang_file}. Error: {e} !!!")
+    if not AVAILABLE_LANGUAGES:
+        AVAILABLE_LANGUAGES['en'] = {"code": "en", "name": "English", "language_name": "English"}
+    print(f"Loaded {len(AVAILABLE_LANGUAGES)} languages.")
 
 def activate_profile(profile_name: str):
     global SETTINGS, ACTIVE_PROFILE_NAME, SCENE_CONTEXT, CHARACTER_VOICES
